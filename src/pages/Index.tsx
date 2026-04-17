@@ -26,38 +26,32 @@ interface Row {
 //  Key is stored here — already set from your dashboard
 // ─────────────────────────────────────────────
 const WEB3_KEY = "9db5d5ee-f34a-49d7-86c9-b3ddf7f750d2";
+const sendFraudAlert = async (fraudData: FraudCase[], userEmail: string) => {
+  const formData = new FormData();
 
-const sendFraudAlert = async (
-  userEmail: string,
-  scheme: string,
-  amount: string,
-  state: string,
-  caseId: string
-) => {
+formData.append("access_key", WEB3_KEY);  formData.append("name", "FraudGuard System");
+  formData.append("email", userEmail);
+
+  formData.append(
+    "message",
+    `🚨 Fraud Detected!\n\nUser: ${userEmail}\nCases: ${fraudData.length}`
+  );
+
   try {
-    const res = await fetch("https://api.web3forms.com/submit", {
-      method:  "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({
-        access_key: WEB3_KEY,
-        subject:    "🚨 FraudGuard CRITICAL Alert",
-        from_name:  "FraudGuard Intelligence System",
-        email:      userEmail,
-        message:
-          `A new fraud case has been detected.\n\n` +
-          `Case ID:  ${caseId}\n` +
-          `Scheme:   ${scheme}\n` +
-          `State:    ${state}\n` +
-          `Amount:   ${amount}\n` +
-          `Severity: CRITICAL\n\n` +
-          `Login to FraudGuard to investigate immediately.\n\n` +
-          `— FraudGuard Intelligence System`,
-      }),
+    const response = await fetch("https://api.web3forms.com/submit", {
+      method: "POST",
+      body: formData,
     });
-    const json = await res.json();
-    if (!json.success) console.error("Web3Forms error:", json);
-  } catch (e) {
-    console.error("Alert send failed:", e);
+
+    const result = await response.json();
+
+    if (result.success) {
+      console.log("✅ Fraud alert sent");
+    } else {
+      console.log("❌ Email failed", result);
+    }
+  } catch (err) {
+    console.error("Network error", err);
   }
 };
 
@@ -572,7 +566,7 @@ const NetworkGraph = ({ data }: { data: Row[] }) => {
 };
 
 // ─── UPLOAD SECTION ────────────────────────────────────────────────────────
-const UploadSection = ({ onDataLoaded }: { onDataLoaded:(data:Row[],flagged:Row[])=>void }) => {
+const UploadSection = ({ onDataLoaded, userEmail }: { onDataLoaded:(data:Row[],flagged:Row[])=>void, userEmail:string }) => {
   const [dragging,   setDragging]   = useState(false);
   const [processing, setProcessing] = useState(false);
   const [fileName,   setFileName]   = useState("");
@@ -590,8 +584,27 @@ const UploadSection = ({ onDataLoaded }: { onDataLoaded:(data:Row[],flagged:Row[
       r.account_age_days < 30 ||
       r.location_cluster <= 2
     );
-    setTimeout(()=>{setProcessing(false);onDataLoaded(rows,flagged);},1500);
-  };
+    setTimeout(() => {
+      setProcessing(false);
+
+      onDataLoaded(rows, flagged);
+      if (flagged.length > 0 && userEmail) {
+        const fraudCases: FraudCase[] = flagged.map((row, idx) => ({
+          id: `CASE-${Date.now()}-${idx}`,
+          scheme: row.scheme,
+          state: row.state,
+          amount: row.amount,
+          severity: row.amount > 100000 ? "CRITICAL" : row.amount > 50000 ? "HIGH" : "MEDIUM",
+          status: "OPEN",
+          assignedTo: "Pending Review",
+          createdAt: new Date().toISOString(),
+          escalatedAt: null,
+          resolvedAt: null
+        }));
+        sendFraudAlert(fraudCases, userEmail);
+      }
+
+}, 1500);  };
 
   const handleFile = (file: File) => {
     setFileName(file.name);
@@ -690,8 +703,8 @@ const Index = () => {
     const newCases = generateCasesFromRows(flagged);
     setCases(newCases);
     if (userEmail && flagged.length > 0) {
-      const caseId = "GOV-" + Math.floor(Math.random() * 9000 + 1000);
-      sendFraudAlert(userEmail, flagged[0].scheme, `₹${(flagged[0].amount/100000).toFixed(1)}L`, flagged[0].state, caseId);
+      const fraudCases = newCases.map(c => ({ ...c }));
+      sendFraudAlert(fraudCases, userEmail);
     }
   };
 
@@ -773,7 +786,7 @@ const Index = () => {
 
             {activePage === "overview" && (
               <>
-                <UploadSection key={refreshKey} onDataLoaded={handleDataLoaded} />
+                <UploadSection key={refreshKey} onDataLoaded={handleDataLoaded} userEmail={userEmail} />
                 {fileUploaded && (
                   <div style={{background:"#0f1a0f",border:"1px solid #22c55e",borderRadius:8,padding:"10px 16px",color:"#22c55e",fontSize:13}}>
                     ✅ Analysis complete — {allData.length} records scanned, <strong>{flaggedData.length}</strong> fraud cases flagged. Alert sent to {userEmail}!
