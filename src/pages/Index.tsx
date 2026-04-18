@@ -1,8 +1,7 @@
 import { useState, useCallback, useEffect } from "react";
 import SplashScreen from "@/components/SplashScreen";
 import AppSidebar from "@/components/AppSidebar";
-import DashboardHeader, { THEMES, ThemeName, applyTheme, LANGUAGES } from "@/components/DashboardHeader";
-import MetricCards from "@/components/MetricCards";
+import DashboardHeader, { THEMES, ThemeName, applyTheme, LANGUAGES } from "@/components/DashboardHeader";import MetricCards from "@/components/MetricCards";
 import CaseTable, { FraudCase } from "@/components/CaseTable";
 import {
   BarChart, Bar, LineChart, Line, AreaChart, Area, PieChart, Pie, Cell,
