@@ -25,35 +25,28 @@ interface Row {
 //  WEB3FORMS EMAIL
 //  Key is stored here — already set from your dashboard
 // ─────────────────────────────────────────────
-const WEB3_KEY = "9db5d5ee-f34a-49d7-86c9-b3ddf7f750d2";
+import emailjs from "@emailjs/browser";
+
 const sendFraudAlert = async (fraudData: FraudCase[], userEmail: string) => {
-  const formData = new FormData();
-
-formData.append("access_key", WEB3_KEY);  formData.append("name", "FraudGuard System");
-  formData.append("email", userEmail);
-
-  formData.append(
-    "message",
-    `🚨 Fraud Detected!\n\nUser: ${userEmail}\nCases: ${fraudData.length}`
-  );
+  const templateParams = {
+    user_email: userEmail,
+    fraud_count: fraudData.length,
+  };
 
   try {
-    const response = await fetch("https://api.web3forms.com/submit", {
-      method: "POST",
-      body: formData,
-    });
+    await emailjs.send(
+      "service_nnp8x0a",      // ✔ your service ID
+      "template_2fz3q1e",     // ✔ your template ID
+      templateParams,
+      "CjM3PwvO5g72W7PHT"     // ✔ your public key
+    );
 
-    const result = await response.json();
-
-    if (result.success) {
-      console.log("✅ Fraud alert sent");
-    } else {
-      console.log("❌ Email failed", result);
-    }
-  } catch (err) {
-    console.error("Network error", err);
+    console.log("✅ Email sent");
+  } catch (error) {
+    console.error("❌ Email failed", error);
   }
 };
+
 
 // ─────────────────────────────────────────────
 //  EMAIL VALIDATION
