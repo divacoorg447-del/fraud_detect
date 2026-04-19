@@ -72,7 +72,7 @@ function useAnimatedCounter(target:number, duration=1200) {
 }
 
 // ─────────────────────────────────────────────
-//  USER REGISTRY (existing)
+//  USER REGISTRY
 // ─────────────────────────────────────────────
 interface UserRecord { name:string; email:string; registeredAt:string; lastLogin?:string; }
 const getRegistry = ():UserRecord[] => { try{return JSON.parse(localStorage.getItem("fraudguard_registry")||"[]");}catch{return[];} };
@@ -145,12 +145,32 @@ const STATE_DATA: Record<string,{x:number;y:number;label:string}> = {
   "Assam":{x:390,y:155,label:"AS"},"Meghalaya":{x:395,y:170,label:"ML"},
 };
 
-const generateCasesFromRows=(rows:Row[]):FraudCase[]=>rows.map((r,i)=>({
-  id:`GOV-${9000+i}`,scheme:r.scheme,state:r.state,amount:r.amount,
-  severity:(r.amount>100000?"CRITICAL":r.claims_per_month>10?"HIGH":"MEDIUM") as "CRITICAL"|"HIGH"|"MEDIUM",
-  status:"OPEN" as const,assignedTo:"Unassigned",createdAt:new Date().toISOString(),
-  escalatedAt:null,resolvedAt:null,
-}));
+// ─────────────────────────────────────────────
+//  CASE GENERATOR
+// ─────────────────────────────────────────────
+const generateCasesFromRows = (rows: Row[]): FraudCase[] =>
+  rows.map((r, i) => {
+    const vectors = [
+      r.claims_per_month > 6,
+      r.amount > 40000,
+      r.account_age_days < 30,
+      r.location_cluster <= 2,
+    ];
+    const score = vectors.filter(Boolean).length * 25;
+    return {
+      id:          `GOV-${9000 + i}`,
+      scheme:      r.scheme,
+      state:       r.state,
+      amount:      r.amount,
+      severity:    (r.amount > 100000 ? "CRITICAL" : r.claims_per_month > 10 ? "HIGH" : "MEDIUM") as "CRITICAL"|"HIGH"|"MEDIUM",
+      status:      "OPEN" as const,
+      assignedTo:  "Unassigned",
+      createdAt:   new Date().toISOString(),
+      escalatedAt: null,
+      resolvedAt:  null,
+      score,
+    };
+  });
 
 const downloadFraudReport=(data:Row[],agentName:string)=>{
   const headers="Case ID,Beneficiary ID,Name,Phone,State,Scheme,Claims/Month,Amount (₹),Account Age (days),Location Cluster,Risk Score,Flag Reasons";
@@ -209,7 +229,6 @@ const IndiaHeatmap=({data,accent}:{data:Row[];accent:string})=>{
           })}
           <text x={250} y={435} textAnchor="middle" fill="#333" fontSize={8} fontFamily="monospace">INDIA — FRAUD DISTRIBUTION MAP</text>
         </svg>
-        {/* Legend + Top States */}
         <div style={{flex:1,minWidth:160}}>
           <div style={{color:"#888",fontSize:10,fontFamily:"monospace",marginBottom:10}}>TOP FRAUD STATES</div>
           {Object.entries(stateCounts).sort((a,b)=>b[1]-a[1]).slice(0,6).map(([state,count])=>(
@@ -315,7 +334,7 @@ const RiskScoreBar=({row}:{row:Row})=>{
 };
 
 // ─────────────────────────────────────────────
-//  MULTI-TYPE CHART (existing, kept)
+//  MULTI-TYPE CHART
 // ─────────────────────────────────────────────
 const MultiChart=({data,graphType,accent}:{data:Row[];graphType:string;accent:string})=>{
   const chartData=data.slice(0,20).map(r=>({name:r.scheme.slice(0,8),amount:Math.round(r.amount/1000),claims:r.claims_per_month,age:r.account_age_days,cluster:r.location_cluster}));
@@ -370,7 +389,7 @@ const AnimatedMetricCards=({flaggedCount,totalSavings,activeCases,escalatedCases
   ];
   return(
     <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:16}}>
-      {metrics.map((m,i)=>(
+      {metrics.map((m)=>(
         <div key={m.label} style={{background:"var(--fg-card,#111)",border:"1px solid var(--fg-border,#1e1e1e)",borderRadius:12,padding:20,transition:"transform 0.2s,box-shadow 0.2s",cursor:"default"}}
           onMouseEnter={e=>{(e.currentTarget as HTMLDivElement).style.transform="translateY(-2px)";(e.currentTarget as HTMLDivElement).style.boxShadow="0 8px 24px rgba(0,0,0,0.4)";}}
           onMouseLeave={e=>{(e.currentTarget as HTMLDivElement).style.transform="translateY(0)";(e.currentTarget as HTMLDivElement).style.boxShadow="none";}}>
@@ -454,7 +473,7 @@ const KeyboardShortcuts=({onNavigate,onRefresh,show,setShow}:{onNavigate:(p:stri
   },[onNavigate,onRefresh,setShow]);
 
   if(!show)return null;
-  const shortcuts=[["?","Show this panel"],["Esc","Close panel"],["R","Refresh page"],["1","Go to Overview"],["2","Go to Alerts"],["3","Go to Accounts"],["4","Go to Analytics"],];
+  const shortcuts=[["?","Show this panel"],["Esc","Close panel"],["R","Refresh page"],["1","Go to Overview"],["2","Go to Alerts"],["3","Go to Accounts"],["4","Go to Analytics"]];
   return(
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.8)",zIndex:10000,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setShow(false)}>
       <div style={{background:"#111",border:"1px solid #333",borderRadius:12,padding:28,width:360}} onClick={e=>e.stopPropagation()}>
@@ -513,7 +532,255 @@ const parseNaturalSearch=(q:string,cases:FraudCase[],flaggedData:Row[])=>{
 };
 
 // ─────────────────────────────────────────────
-//  LOGIN PAGE with login attempts limiter (Feature 19) + last login (Feature 18)
+//  ALERTS PAGE (Feature — real + static alerts)
+// ─────────────────────────────────────────────
+const AlertsPage=({cases,onNavigateToCase}:{cases:FraudCase[];onNavigateToCase:()=>void})=>{
+  const escalated=cases.filter(c=>c.status==="ESCALATED");
+  const staticAlerts=[
+    {id:"GOV-9921",msg:"Critical fraud in MGNREGS Jharkhand — 312 ghost workers",time:"2 min ago",sev:"CRITICAL"},
+    {id:"GOV-7703",msg:"Fake Ayushman Bharat claims detected in Bihar",time:"5 min ago",sev:"CRITICAL"},
+    {id:"GOV-8847",msg:"Duplicate IDs found in PM-KISAN UP",time:"12 min ago",sev:"HIGH"},
+    {id:"GOV-4401",msg:"Shell entities flagged in PMEGP Maharashtra",time:"18 min ago",sev:"HIGH"},
+    {id:"GOV-6612",msg:"Address fraud detected in PMAY Rajasthan",time:"25 min ago",sev:"MEDIUM"},
+  ];
+  return(
+    <div style={{padding:24}}>
+      <h2 style={{color:"var(--fg-text,#fff)",marginBottom:6,fontSize:16}}>🔴 Live Alerts</h2>
+      <p style={{color:"#555",fontSize:12,marginBottom:20}}>
+        {escalated.length>0
+          ?`${escalated.length} escalated case${escalated.length>1?"s":""} from uploaded data + system alerts`
+          :"System alerts — upload CSV to see real escalated cases here"}
+      </p>
+      {escalated.length>0&&(
+        <>
+          <div style={{color:"#cc0000",fontSize:10,fontFamily:"monospace",letterSpacing:1,marginBottom:10}}>⚡ FROM YOUR UPLOADED DATA</div>
+          {escalated.map(c=>(
+            <div key={c.id} onClick={onNavigateToCase}
+              style={{background:"rgba(204,0,0,0.06)",border:"1px solid #cc000033",borderLeft:"3px solid #cc0000",borderRadius:8,padding:"14px 18px",marginBottom:10,display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer",transition:"background 0.2s"}}
+              onMouseEnter={e=>(e.currentTarget as HTMLDivElement).style.background="rgba(204,0,0,0.12)"}
+              onMouseLeave={e=>(e.currentTarget as HTMLDivElement).style.background="rgba(204,0,0,0.06)"}>
+              <div>
+                <span style={{color:"#cc0000",fontFamily:"monospace",fontSize:12,marginRight:12,fontWeight:700}}>{c.id}</span>
+                <span style={{color:"#e0e0e0",fontSize:13}}>{c.scheme} — {c.state}</span>
+                <div style={{color:"#555",fontSize:10,marginTop:4,fontFamily:"monospace"}}>₹{(c.amount/100000).toFixed(1)}L · Escalated · Click to view in Overview →</div>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <span style={{color:"#888",fontSize:10}}>Just now</span>
+                <span style={{background:"#cc0000",color:"#fff",fontSize:10,padding:"2px 8px",borderRadius:4,fontFamily:"monospace"}}>ESCALATED</span>
+              </div>
+            </div>
+          ))}
+          <div style={{height:1,background:"#1e1e1e",margin:"16px 0"}}/>
+        </>
+      )}
+      <div style={{color:"#555",fontSize:10,fontFamily:"monospace",letterSpacing:1,marginBottom:10}}>📡 SYSTEM INTELLIGENCE FEED</div>
+      {staticAlerts.map(a=>(
+        <div key={a.id} style={{background:"var(--fg-card,#111)",border:"1px solid var(--fg-border,#1e1e1e)",borderRadius:8,padding:"14px 18px",marginBottom:10,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div>
+            <span style={{color:"var(--fg-accent,#cc0000)",fontFamily:"monospace",fontSize:12,marginRight:12}}>{a.id}</span>
+            <span style={{color:"var(--fg-text,#ccc)",fontSize:13}}>{a.msg}</span>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:12}}>
+            <span style={{color:"#555",fontSize:11}}>{a.time}</span>
+            <span style={{background:a.sev==="CRITICAL"?"#cc0000":a.sev==="HIGH"?"#dd6b20":"#d69e2e",color:"#fff",fontSize:10,padding:"2px 8px",borderRadius:4,fontFamily:"monospace"}}>{a.sev}</span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────
+//  ACCOUNTS PAGE
+// ─────────────────────────────────────────────
+const AccountsPage=()=>(
+  <div style={{padding:24}}>
+    <h2 style={{color:"var(--fg-text,#fff)",marginBottom:16,fontSize:16}}>👥 Monitored Accounts</h2>
+    <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+      <thead><tr style={{borderBottom:"1px solid var(--fg-border,#1e1e1e)",color:"#666"}}>{["Beneficiary ID","Name","Phone","State","Schemes","Risk Score"].map(h=>(<th key={h} style={{textAlign:"left",padding:"10px 14px",fontFamily:"monospace",fontSize:10}}>{h}</th>))}</tr></thead>
+      <tbody>{[["BEN0021","Rahul Kumar","9812345678","Bihar","MGNREGS","92%"],["BEN0047","Amit Sharma","9812345678","Jharkhand","PMAY","88%"],["BEN0093","Meena Kumari","9812345678","Maharashtra","Mid-Day Meal","95%"],["BEN0112","Kavita Verma","9867890123","UP","PM-KISAN","76%"],["BEN0134","Anita Roy","9889012345","Rajasthan","Ayushman Bharat","81%"]].map(([id,n,p,s,sc,r])=>(<tr key={id} style={{borderBottom:"1px solid var(--fg-border,#161616)"}}><td style={{padding:"10px 14px",color:"var(--fg-accent,#cc0000)",fontFamily:"monospace"}}>{id}</td><td style={{padding:"10px 14px",color:"var(--fg-text,#fff)"}}>{n}</td><td style={{padding:"10px 14px",color:"#888"}}>{p}</td><td style={{padding:"10px 14px",color:"#888"}}>{s}</td><td style={{padding:"10px 14px",color:"var(--fg-text,#ccc)"}}>{sc}</td><td style={{padding:"10px 14px"}}><span style={{color:"var(--fg-accent,#cc0000)",fontWeight:700}}>{r}</span></td></tr>))}</tbody>
+    </table>
+  </div>
+);
+
+// ─────────────────────────────────────────────
+//  ANALYTICS PAGE
+// ─────────────────────────────────────────────
+const AnalyticsPage=()=>(
+  <div style={{padding:24}}>
+    <h2 style={{color:"var(--fg-text,#fff)",marginBottom:16,fontSize:16}}>📊 Analytics Summary</h2>
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:16}}>
+      {[{label:"Total Records Scanned",value:"2.4M",color:"var(--fg-text,#fff)"},{label:"Fraud Detection Rate",value:"15.2%",color:"var(--fg-accent,#cc0000)"},{label:"Amount Recovered",value:"₹95.8L",color:"#22c55e"},{label:"Active Investigations",value:"75",color:"#d69e2e"},{label:"Resolved Cases",value:"1,102",color:"#22c55e"},{label:"States Covered",value:"6",color:"var(--fg-text,#fff)"}].map(({label,value,color})=>(<div key={label} style={{background:"var(--fg-card,#111)",border:"1px solid var(--fg-border,#1e1e1e)",borderRadius:8,padding:20}}><div style={{color:"#666",fontSize:11,fontFamily:"monospace",marginBottom:8}}>{label}</div><div style={{color,fontSize:28,fontWeight:700}}>{value}</div></div>))}
+    </div>
+    <h2 style={{color:"var(--fg-text,#fff)",marginTop:32,marginBottom:16,fontSize:16}}>🔍 Fraud Detection Methods</h2>
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:16}}>
+      {FRAUD_METHODS.map(m=>(<div key={m.title} style={{background:"var(--fg-card,#111)",border:"1px solid var(--fg-border,#1e1e1e)",borderRadius:8,padding:16}}><div style={{fontSize:22,marginBottom:8}}>{m.icon}</div><div style={{color:"var(--fg-accent,#cc0000)",fontSize:12,fontWeight:600,marginBottom:6}}>{m.title}</div><div style={{color:"#666",fontSize:11,lineHeight:1.5}}>{m.desc}</div></div>))}
+    </div>
+  </div>
+);
+
+// ─────────────────────────────────────────────
+//  HELP PAGE
+// ─────────────────────────────────────────────
+const HelpPage=()=>(
+  <div style={{padding:24,maxWidth:800}}>
+    <h2 style={{color:"var(--fg-text,#fff)",marginBottom:6,fontSize:18}}>❓ Help & Fraud Prevention Guide</h2>
+    <p style={{color:"#666",fontSize:12,marginBottom:24}}>How to protect yourself and beneficiaries from fraud.</p>
+    {[{icon:"🔒",title:"Never Share Your OTP",body:"Government schemes never ask for OTP over phone. Hang up and report to 1930."},{icon:"🪪",title:"Protect Your Aadhaar",body:"Never share your Aadhaar number or biometric data with unknown persons."},{icon:"📱",title:"Use Official Apps Only",body:"Download government scheme apps only from official Play Store / App Store."},{icon:"🏦",title:"Check Your Bank Account",body:"Enable SMS alerts for every transaction. Report fraud within 3 days."},{icon:"🌐",title:"Verify Website URLs",body:"Government portals use .gov.in domains. Fraudulent sites use .com or .net."},{icon:"📞",title:"Cyber Crime Helpline",body:"National Cyber Crime Helpline: 1930. Report at cybercrime.gov.in."},{icon:"📊",title:"12 Graph Types",body:"After uploading CSV, click the chart type button (top right of chart) to switch between Bar, Line, Area, Pie, Donut, Radar, Scatter, Stacked Bar, Horizontal, Stepped, Bubble, and Funnel charts."},{icon:"📥",title:"Download Fraud Report",body:"After scanning, click '⬇ Download Fraud Report' for a full CSV with case IDs, risk scores and flag reasons."},{icon:"📧",title:"Email Alert Button",body:"Click '📧 Send Email Alert' after scanning to manually send an alert. You are in full control — no auto-emails."},{icon:"⌨️",title:"Keyboard Shortcuts",body:"Press ? to see all keyboard shortcuts. Press R to refresh, 1-4 to navigate pages instantly."},{icon:"🗺️",title:"India Heatmap",body:"The state-wise heatmap shows which states have the most fraud cases. Bubble size and color intensity indicate fraud volume."},{icon:"🏆",title:"Scheme Leaderboard",body:"Shows top 5 government schemes with most fraud cases ranked by case count."}].map(item=>(
+      <div key={item.title} style={{background:"var(--fg-card,#111)",border:"1px solid var(--fg-border,#1e1e1e)",borderRadius:10,padding:"16px 20px",marginBottom:12,display:"flex",gap:16,alignItems:"flex-start"}}>
+        <div style={{fontSize:28,flexShrink:0,marginTop:2}}>{item.icon}</div>
+        <div><div style={{color:"var(--fg-text,#fff)",fontSize:14,fontWeight:600,marginBottom:6}}>{item.title}</div><div style={{color:"#777",fontSize:12,lineHeight:1.7}}>{item.body}</div></div>
+      </div>
+    ))}
+  </div>
+);
+
+// ─────────────────────────────────────────────
+//  FAQ PAGE
+// ─────────────────────────────────────────────
+const FAQPage=()=>{
+  const[open,setOpen]=useState<number|null>(null);
+  const faqs=[{q:"What is FraudGuard?",a:"FraudGuard is an AI-powered government fraud detection system scanning beneficiary data across 9 fraud vectors in real time."},{q:"How does the ML model work?",a:"It flags: claims_per_month > 6, amount > ₹40,000, account age < 30 days, or location cluster ≤ 2."},{q:"How do I upload data?",a:"Overview → Upload Beneficiary Data. Required columns: beneficiary_id, name, phone, state, scheme, claims_per_month, amount, location_cluster, account_age_days."},{q:"How do email alerts work?",a:"Emails are NOT auto-sent. After scanning, click '📧 Send Email Alert' to control when to send."},{q:"How do I download the fraud report?",a:"After scanning, click '⬇ Download Fraud Report'. CSV includes Case ID, risk score (0-100%) and exact flag reasons."},{q:"How does login protection work?",a:"After 3 failed sign-in attempts, the login is locked for 30 seconds. This prevents brute force attacks."},{q:"What is the session timeout?",a:"After 15 minutes of inactivity, a 60-second countdown appears. You can click 'Stay Logged In' or it auto-logs you out."},{q:"What do keyboard shortcuts do?",a:"Press ? to see all shortcuts. R refreshes, 1-4 navigate pages, Esc closes popups."},{q:"Can I see last login info?",a:"Yes! Your last login time appears in the profile dropdown in the header."},{q:"What are the 12 graph types?",a:"Bar, Line, Area, Pie, Donut, Radar, Scatter, Stacked Bar, Horizontal Bar, Stepped Line, Bubble, and Funnel."}];
+  return(
+    <div style={{padding:24,maxWidth:740}}>
+      <h2 style={{color:"var(--fg-text,#fff)",marginBottom:6,fontSize:18}}>📌 FAQ</h2>
+      <p style={{color:"#666",fontSize:12,marginBottom:24}}>Common questions about FraudGuard.</p>
+      {faqs.map((f,i)=>(
+        <div key={i} style={{background:"var(--fg-card,#111)",border:"1px solid var(--fg-border,#1e1e1e)",borderRadius:8,marginBottom:10,overflow:"hidden"}}>
+          <button onClick={()=>setOpen(open===i?null:i)} style={{width:"100%",display:"flex",justifyContent:"space-between",alignItems:"center",padding:"14px 18px",background:"transparent",border:"none",cursor:"pointer",textAlign:"left"}}>
+            <span style={{color:"var(--fg-text,#fff)",fontSize:13,fontWeight:600}}>{f.q}</span>
+            <span style={{color:"var(--fg-accent,#cc0000)",fontSize:18,lineHeight:1}}>{open===i?"−":"+"}</span>
+          </button>
+          {open===i&&<div style={{padding:"0 18px 14px",color:"#777",fontSize:12,lineHeight:1.7,borderTop:"1px solid var(--fg-border,#1e1e1e)"}}><div style={{paddingTop:12}}>{f.a}</div></div>}
+        </div>
+      ))}
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────
+//  TERMS PAGE
+// ─────────────────────────────────────────────
+const TermsPage=()=>(
+  <div style={{padding:24,maxWidth:740}}>
+    <h2 style={{color:"var(--fg-text,#fff)",marginBottom:6,fontSize:18}}>📄 Terms & Conditions</h2>
+    <p style={{color:"#666",fontSize:12,marginBottom:24}}>Last updated: April 2026</p>
+    {[{title:"1. Authorized Use Only",body:"FraudGuard is an internal government tool. Unauthorized access violates IT Act 2000, Section 66."},{title:"2. Data Confidentiality",body:"All beneficiary data is classified RESTRICTED. Do not share or transmit to unauthorized parties."},{title:"3. Accuracy Disclaimer",body:"The fraud detection model provides probabilistic outputs. Flagged records require manual review."},{title:"4. Email Alerts",body:"By registering, you consent to receive alerts. You can disable in Settings or trigger manually."},{title:"5. Session Security",body:"Each session is logged. Logout after each session on shared systems. Idle timeout is 15 minutes."},{title:"6. Data Retention",body:"No beneficiary data stored on external servers. CSV data is processed in-browser only."},{title:"7. Reporting Obligations",body:"Confirmed fraud cases must be escalated within 24 hours of detection."}].map(item=>(
+      <div key={item.title} style={{marginBottom:20}}>
+        <div style={{color:"var(--fg-accent,#cc0000)",fontSize:13,fontWeight:700,marginBottom:6,fontFamily:"monospace"}}>{item.title}</div>
+        <div style={{color:"#777",fontSize:12,lineHeight:1.7,background:"var(--fg-card,#111)",border:"1px solid var(--fg-border,#1e1e1e)",borderRadius:8,padding:"12px 16px"}}>{item.body}</div>
+      </div>
+    ))}
+  </div>
+);
+
+// ─────────────────────────────────────────────
+//  SETTINGS PAGE
+// ─────────────────────────────────────────────
+const SettingsPage=({userEmail,agentName,onLogout,theme,setTheme,language,setLanguage}:{userEmail:string;agentName:string;onLogout:()=>void;theme:ThemeName;setTheme:(t:ThemeName)=>void;language:string;setLanguage:(c:string)=>void})=>{
+  const[settings,setSettings]=useState({agent_name:agentName,alert_threshold:"0.75",claims_limit:"6",amount_limit:"40,000",email_alerts:true});
+  const[saved,setSaved]=useState(false);
+  const acc=THEMES[theme].accent;
+  const saveSettings=()=>{localStorage.setItem("fraudguard_settings",JSON.stringify(settings));localStorage.setItem("fraudguard_name",settings.agent_name);setSaved(true);toast("Settings saved!","success");setTimeout(()=>setSaved(false),2000);};
+  return(
+    <div style={{padding:24,maxWidth:580}}>
+      <h2 style={{color:"var(--fg-text,#fff)",marginBottom:24,fontSize:16}}>⚙️ Settings</h2>
+      <div style={{background:"var(--fg-card,#111)",border:"1px solid var(--fg-border,#1e1e1e)",borderRadius:8,padding:"16px 18px",marginBottom:12}}>
+        <div style={{color:"var(--fg-text,#fff)",fontSize:13,marginBottom:4}}>🔤 Accessibility — Font Size</div>
+        <div style={{color:"#555",fontSize:11,marginBottom:10}}>Adjust text size for better readability</div>
+        <FontSizeToggle accent={acc}/>
+      </div>
+      <div style={{background:"var(--fg-card,#111)",border:"1px solid var(--fg-border,#1e1e1e)",borderRadius:8,padding:"16px 18px",marginBottom:12}}>
+        <div style={{color:"var(--fg-text,#fff)",fontSize:13,marginBottom:4}}>Dashboard Theme</div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:8,marginTop:8}}>
+          {(Object.entries(THEMES) as [ThemeName,typeof THEMES[ThemeName]][]).map(([key,val])=>(<button key={key} onClick={()=>{setTheme(key);applyTheme(key);}} style={{display:"flex",alignItems:"center",gap:6,padding:"6px 12px",background:theme===key?"var(--fg-accent,#cc0000)22":"transparent",border:`1px solid ${theme===key?"var(--fg-accent,#cc0000)":"#333"}`,borderRadius:6,cursor:"pointer",color:theme===key?"var(--fg-accent,#cc0000)":"#888",fontSize:11,fontFamily:"monospace",transition:"all .2s"}}>{val.icon} {val.label}</button>))}
+        </div>
+      </div>
+      <div style={{background:"var(--fg-card,#111)",border:"1px solid var(--fg-border,#1e1e1e)",borderRadius:8,padding:"16px 18px",marginBottom:12}}>
+        <div style={{color:"var(--fg-text,#fff)",fontSize:13,marginBottom:4}}>🌐 Language</div>
+        <div style={{color:"#555",fontSize:11,marginBottom:10}}>Dashboard display language (15 available)</div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+          {LANGUAGES.map(lang=>(<button key={lang.code} onClick={()=>{setLanguage(lang.code);localStorage.setItem("fraudguard_lang",lang.code);}} style={{display:"flex",alignItems:"center",gap:4,padding:"5px 10px",background:language===lang.code?"var(--fg-accent,#cc0000)22":"transparent",border:`1px solid ${language===lang.code?"var(--fg-accent,#cc0000)":"#333"}`,borderRadius:6,cursor:"pointer",color:language===lang.code?"var(--fg-accent,#cc0000)":"#888",fontSize:11}}>{lang.flag} {lang.label}</button>))}
+        </div>
+      </div>
+      <div style={{background:"var(--fg-card,#111)",border:"1px solid var(--fg-border,#1e1e1e)",borderRadius:8,padding:"16px 18px",marginBottom:12}}>
+        <div style={{color:"var(--fg-text,#fff)",fontSize:13,marginBottom:4}}>Email Alerts</div>
+        <div style={{color:"#555",fontSize:11,marginBottom:12}}>Registered email: <span style={{color:"var(--fg-accent,#cc0000)"}}>{userEmail}</span></div>
+        <div style={{display:"flex",alignItems:"center",gap:10}}><span style={{color:"#888",fontSize:12}}>Send fraud alerts to email</span><button onClick={()=>setSettings(s=>({...s,email_alerts:!s.email_alerts}))} style={{background:settings.email_alerts?"#22c55e":"#333",border:"none",borderRadius:20,padding:"4px 16px",color:"#fff",cursor:"pointer",fontSize:12,transition:"background .2s"}}>{settings.email_alerts?"ON":"OFF"}</button></div>
+      </div>
+      {[{key:"agent_name",label:"Agent Name",desc:"Your display name"},{key:"alert_threshold",label:"Alert Threshold",desc:"Min fraud score (0–1)"},{key:"claims_limit",label:"Claims Limit",desc:"Max claims/month before flagging"},{key:"amount_limit",label:"Amount Limit (₹)",desc:"Max amount before flagging"}].map(({key,label,desc})=>(<div key={key} style={{background:"var(--fg-card,#111)",border:"1px solid var(--fg-border,#1e1e1e)",borderRadius:8,padding:"14px 18px",marginBottom:10,display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{color:"var(--fg-text,#fff)",fontSize:13}}>{label}</div><div style={{color:"#555",fontSize:11,marginTop:2}}>{desc}</div></div><input value={settings[key as keyof typeof settings] as string} onChange={e=>setSettings(s=>({...s,[key]:e.target.value}))} style={{background:"#1a1a1a",border:"1px solid #333",borderRadius:6,padding:"6px 10px",color:"var(--fg-accent,#cc0000)",fontFamily:"monospace",fontSize:13,width:120,textAlign:"right",outline:"none"}}/></div>))}
+      <div style={{display:"flex",gap:12,marginTop:12}}>
+        <button onClick={saveSettings} style={{background:saved?"#22c55e":"var(--fg-accent,#cc0000)",color:"#fff",border:"none",borderRadius:8,padding:"10px 28px",cursor:"pointer",fontSize:13,fontWeight:600,transition:"background 0.3s"}}>{saved?"✅ Saved!":"Save Settings"}</button>
+        <button onClick={onLogout} style={{background:"transparent",color:"var(--fg-accent,#cc0000)",border:"1px solid var(--fg-accent,#cc0000)",borderRadius:8,padding:"10px 24px",cursor:"pointer",fontSize:13}}>🚪 Logout</button>
+      </div>
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────
+//  NETWORK GRAPH
+// ─────────────────────────────────────────────
+const NetworkGraph=({data}:{data:Row[]})=>{
+  const nodes:{id:string;x:number;y:number}[]=[],edges:{x1:number;y1:number;x2:number;y2:number}[]=[];
+  const phoneMap:Record<string,string[]>={};
+  data.forEach(r=>{if(!phoneMap[r.phone])phoneMap[r.phone]=[];phoneMap[r.phone].push(r.beneficiary_id);});
+  const placed:Record<string,{x:number;y:number}>={};let idx=0;
+  Object.values(phoneMap).forEach(group=>{if(group.length>1){const cx=80+(idx%5)*160,cy=80+Math.floor(idx/5)*120;group.forEach((id,i)=>{const a=(i/group.length)*Math.PI*2;placed[id]={x:cx+Math.cos(a)*40,y:cy+Math.sin(a)*40};nodes.push({id,...placed[id]});});for(let i=0;i<group.length;i++)for(let j=i+1;j<group.length;j++)edges.push({x1:placed[group[i]].x,y1:placed[group[i]].y,x2:placed[group[j]].x,y2:placed[group[j]].y});idx++;}});
+  if(!nodes.length)return null;
+  return(
+    <div style={{background:"var(--fg-card,#111)",border:"1px solid var(--fg-border,#1e1e1e)",borderRadius:12,padding:20}}>
+      <div style={{color:"var(--fg-text,#fff)",fontWeight:600,marginBottom:4,fontSize:14}}>🔗 Network Graph — Shared Phone Clusters</div>
+      <div style={{color:"#888",fontSize:11,marginBottom:12}}>Red nodes = suspicious accounts sharing the same phone number</div>
+      <svg width="100%" height="280" style={{background:"#0a0a0a",borderRadius:8}}>
+        {edges.map((e,i)=><line key={i} x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2} stroke="#cc000044" strokeWidth={1.5}/>)}
+        {nodes.map(n=><g key={n.id}><circle cx={n.x} cy={n.y} r={8} fill="var(--fg-accent,#cc0000)" opacity={0.85}/><text x={n.x} y={n.y+20} textAnchor="middle" fill="#888" fontSize={8}>{n.id.slice(0,6)}</text></g>)}
+      </svg>
+      <div style={{marginTop:10,fontSize:11,color:"var(--fg-accent,#cc0000)",fontFamily:"monospace"}}>{nodes.length} suspicious nodes · {Object.values(phoneMap).filter(g=>g.length>1).length} clusters</div>
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────
+//  UPLOAD SECTION
+// ─────────────────────────────────────────────
+const UploadSection=({onDataLoaded,flaggedData,agentName,userEmail,fileUploaded}:{onDataLoaded:(d:Row[],f:Row[])=>void;flaggedData:Row[];agentName:string;userEmail:string;fileUploaded:boolean})=>{
+  const[dragging,setDragging]=useState(false);
+  const[processing,setProcessing]=useState(false);
+  const[fileName,setFileName]=useState("");
+  const[alertSent,setAlertSent]=useState(false);
+  const[sending,setSending]=useState(false);
+  const processCSV=(text:string)=>{
+    setProcessing(true);
+    const lines=text.trim().split("\n");
+    const rows:Row[]=lines.slice(1).map(line=>{const v=line.split(",");return{beneficiary_id:v[0]?.trim(),name:v[1]?.trim(),phone:v[2]?.trim(),state:v[3]?.trim(),scheme:v[4]?.trim(),claims_per_month:Number(v[5]),amount:Number(v[6]),location_cluster:Number(v[7]),account_age_days:Number(v[8])};});
+    const flagged=rows.filter(r=>r.claims_per_month>6||r.amount>40000||r.account_age_days<30||r.location_cluster<=2);
+    setTimeout(()=>{setProcessing(false);onDataLoaded(rows,flagged);toast(`✅ ${flagged.length} fraud cases detected from ${rows.length} records`,"success");},1500);
+  };
+  const handleFile=(file:File)=>{setFileName(file.name);const reader=new FileReader();reader.onload=e=>processCSV(e.target?.result as string);reader.readAsText(file);};
+  const downloadSample=()=>{const csv=["beneficiary_id,name,phone,state,scheme,claims_per_month,amount,location_cluster,account_age_days","BEN001,Rahul Kumar,9812345678,Bihar,MGNREGS,12,95000,2,15","BEN002,Priya Singh,9823456789,UP,PM-KISAN,2,8000,7,450","BEN003,Amit Sharma,9812345678,Jharkhand,PMAY,15,180000,1,8","BEN004,Sunita Devi,9834567890,Rajasthan,Ayushman Bharat,1,6000,9,600","BEN005,Raj Patel,9845678901,MP,PMEGP,3,12000,5,300","BEN006,Meena Kumari,9812345678,Maharashtra,Mid-Day Meal,18,200000,1,5"].join("\n");const blob=new Blob([csv],{type:"text/csv"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="sample_beneficiaries.csv";a.click();toast("Sample CSV downloaded","info");};
+  const handleSendAlert=async()=>{if(!flaggedData.length||!userEmail)return;setSending(true);const caseId="GOV-"+Math.floor(Math.random()*9000+1000);await sendFraudAlert(userEmail,flaggedData[0].scheme,`₹${(flaggedData[0].amount/100000).toFixed(1)}L`,flaggedData[0].state,caseId);setSending(false);setAlertSent(true);toast("📧 Alert email sent to "+userEmail,"success");setTimeout(()=>setAlertSent(false),4000);};
+  return(
+    <div style={{padding:24,background:"var(--fg-card,#111)",border:"1px solid var(--fg-border,#1e1e1e)",borderRadius:12}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+        <div><div style={{color:"var(--fg-text,#fff)",fontWeight:600,fontSize:15}}>📂 Upload Beneficiary Data</div><div style={{color:"#666",fontSize:11,marginTop:2}}>CSV · Fraud detected across 4 vectors: high claims, high amount, new account, suspicious location</div></div>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",justifyContent:"flex-end"}}>
+          <button onClick={downloadSample} style={{background:"transparent",color:"#22c55e",border:"1px solid #22c55e",borderRadius:6,padding:"6px 14px",cursor:"pointer",fontSize:12,fontWeight:600}}>⬇ Sample CSV</button>
+          {fileUploaded&&<>
+            <button onClick={()=>{downloadFraudReport(flaggedData,agentName);toast("📊 Fraud report downloaded","success");}} style={{background:"transparent",color:"var(--fg-accent,#cc0000)",border:"1px solid var(--fg-accent,#cc0000)",borderRadius:6,padding:"6px 14px",cursor:"pointer",fontSize:12,fontWeight:600}}>⬇ Download Fraud Report</button>
+            <button onClick={handleSendAlert} disabled={sending||alertSent} style={{background:alertSent?"#22c55e":"var(--fg-accent,#cc0000)",color:"#fff",border:"none",borderRadius:6,padding:"6px 14px",cursor:alertSent?"default":"pointer",fontSize:12,fontWeight:600,opacity:sending?0.7:1}}>{alertSent?"✅ Alert Sent!":sending?"⏳ Sending...":"📧 Send Email Alert"}</button>
+          </>}
+        </div>
+      </div>
+      <div onDragOver={e=>{e.preventDefault();setDragging(true);}} onDragLeave={()=>setDragging(false)} onDrop={e=>{e.preventDefault();setDragging(false);const f=e.dataTransfer.files[0];if(f)handleFile(f);}} onClick={()=>document.getElementById("csv-input")?.click()} style={{border:`2px dashed ${dragging?"var(--fg-accent,#cc0000)":"#333"}`,borderRadius:8,padding:32,textAlign:"center",cursor:"pointer",background:dragging?"rgba(204,0,0,0.05)":"transparent",transition:"all .2s"}}>
+        <input id="csv-input" type="file" accept=".csv" style={{display:"none"}} onChange={e=>{const f=e.target.files?.[0];if(f)handleFile(f);}}/>
+        {processing?<div style={{color:"var(--fg-accent,#cc0000)",fontFamily:"monospace"}}>⏳ Running fraud detection model...</div>:fileName?<div style={{color:"#22c55e",fontWeight:600}}>✅ {fileName} — ready</div>:<div style={{color:"#555"}}>📁 Drag and drop CSV here or click to browse</div>}
+      </div>
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────
+//  LOGIN PAGE (Feature 18 + 19)
 // ─────────────────────────────────────────────
 type AuthMode="signin"|"register"|"guest";
 const LoginPage=({onLogin}:{onLogin:(name:string,email:string)=>void})=>{
@@ -526,7 +793,6 @@ const LoginPage=({onLogin}:{onLogin:(name:string,email:string)=>void})=>{
   const[loading,setLoading]=useState(false);
   const[showPwd,setShowPwd]=useState(false);
   const[showCPwd,setShowCPwd]=useState(false);
-  // Feature 19: attempt limiter
   const[attempts,setAttempts]=useState(0);
   const[lockUntil,setLockUntil]=useState<number|null>(null);
   const[lockSec,setLockSec]=useState(0);
@@ -546,7 +812,7 @@ const LoginPage=({onLogin}:{onLogin:(name:string,email:string)=>void})=>{
   const[fmtPhrase,setFmtPhrase]=useState("waiting...");
   const[fmtColor,setFmtColor]=useState("#555");
 
-  const handleNameChange=(v:string)=>{setName(v);const t=v.trim();if(t.length>0&&t.length<2)setNameHint({cls:"err",text:"⚠ Too short"});else if(t.length>=2)setNameHint({cls:"ok",text:"✓ Accepted"});else setNameHint({cls:"",text:""}); };
+  const handleNameChange=(v:string)=>{setName(v);const t=v.trim();if(t.length>0&&t.length<2)setNameHint({cls:"err",text:"⚠ Too short"});else if(t.length>=2)setNameHint({cls:"ok",text:"✓ Accepted"});else setNameHint({cls:"",text:""});};
   const handleEmailChange=(v:string)=>{setEmail(v);const[st,phrase]=getEmailPhrase(v);setFmtPhrase(phrase);setFmtColor(st==="ok"?"#22a855":st==="err"?"#cc3333":"#555");if(!v){setEmailHint({cls:"",text:""});return;}setEmailHint(st==="ok"?{cls:"ok",text:"✓ Email accepted"}:{cls:"err",text:"⚠ "+phrase});};
 
   const handleSubmit=()=>{
@@ -565,7 +831,6 @@ const LoginPage=({onLogin}:{onLogin:(name:string,email:string)=>void})=>{
       if(pwd!==confirmPwd){setError("Passwords do not match");return;}
       addToRegistry(n,e);
     } else {
-      // simulate wrong password check — if not registered, increment attempts
       if(mode==="signin"&&!emailExists(e)){
         const newAttempts=attempts+1;
         setAttempts(newAttempts);
@@ -606,8 +871,6 @@ const LoginPage=({onLogin}:{onLogin:(name:string,email:string)=>void})=>{
         .lg-inp::placeholder{color:#2a2a2a}.lg-inp.valid{border-color:rgba(0,180,80,0.6)!important}.lg-inp.invalid{border-color:rgba(204,0,0,0.8)!important}
         .bg-node{position:absolute;border-radius:50%;pointer-events:none;animation:pulseNode 3s ease-in-out infinite}
         .fc{position:absolute;background:rgba(10,0,0,0.75);border:1px solid rgba(204,0,0,0.18);border-radius:4px;font-family:monospace;pointer-events:none;padding:8px 12px}
-        .dashboard-fade{animation:fadePageIn 0.3s ease}
-        @keyframes fadePageIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
       `}</style>
       <div style={{position:"absolute",inset:0,backgroundImage:"linear-gradient(rgba(180,0,0,0.04) 1px,transparent 1px),linear-gradient(90deg,rgba(180,0,0,0.04) 1px,transparent 1px)",backgroundSize:"40px 40px",animation:"gridMove 10s linear infinite"}}/>
       <div style={{position:"absolute",left:0,right:0,height:2,background:"linear-gradient(90deg,transparent,rgba(204,0,0,0.3),transparent)",animation:"scan 5s linear infinite",zIndex:2}}/>
@@ -628,7 +891,6 @@ const LoginPage=({onLogin}:{onLogin:(name:string,email:string)=>void})=>{
         <div style={{display:"flex",background:"#0a0a0a",border:"1px solid rgba(204,0,0,0.15)",borderRadius:4,marginBottom:18,overflow:"hidden"}}>
           {modeTab("signin","SIGN IN")}{modeTab("register","REGISTER")}{modeTab("guest","GUEST")}
         </div>
-        {/* Lock warning */}
         {lockUntil&&Date.now()<lockUntil&&(
           <div style={{background:"#150000",border:"1px solid #cc0000",borderRadius:3,padding:"8px 12px",color:"#cc0000",fontSize:11,marginBottom:12,fontFamily:"monospace",textAlign:"center"}}>
             🔒 Too many attempts. Wait <strong>{lockSec}s</strong> before trying again.
@@ -686,112 +948,6 @@ const LoginPage=({onLogin}:{onLogin:(name:string,email:string)=>void})=>{
 };
 
 // ─────────────────────────────────────────────
-//  INNER PAGES
-// ─────────────────────────────────────────────
-const AlertsPage=()=>(<div style={{padding:24}}><h2 style={{color:"var(--fg-text,#fff)",marginBottom:16,fontSize:16}}>🔴 Live Alerts</h2>{[{id:"GOV-9921",msg:"Critical fraud in MGNREGS Jharkhand — 312 ghost workers",time:"2 min ago",sev:"CRITICAL"},{id:"GOV-7703",msg:"Fake Ayushman Bharat claims detected in Bihar",time:"5 min ago",sev:"CRITICAL"},{id:"GOV-8847",msg:"Duplicate IDs found in PM-KISAN UP",time:"12 min ago",sev:"HIGH"},{id:"GOV-4401",msg:"Shell entities flagged in PMEGP Maharashtra",time:"18 min ago",sev:"HIGH"},{id:"GOV-6612",msg:"Address fraud detected in PMAY Rajasthan",time:"25 min ago",sev:"MEDIUM"}].map(a=>(<div key={a.id} style={{background:"var(--fg-card,#111)",border:"1px solid var(--fg-border,#1e1e1e)",borderRadius:8,padding:"14px 18px",marginBottom:10,display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><span style={{color:"var(--fg-accent,#cc0000)",fontFamily:"monospace",fontSize:12,marginRight:12}}>{a.id}</span><span style={{color:"var(--fg-text,#ccc)",fontSize:13}}>{a.msg}</span></div><div style={{display:"flex",alignItems:"center",gap:12}}><span style={{color:"#555",fontSize:11}}>{a.time}</span><span style={{background:a.sev==="CRITICAL"?"#cc0000":a.sev==="HIGH"?"#dd6b20":"#d69e2e",color:"#fff",fontSize:10,padding:"2px 8px",borderRadius:4,fontFamily:"monospace"}}>{a.sev}</span></div></div>))}</div>);
-const AccountsPage=()=>(<div style={{padding:24}}><h2 style={{color:"var(--fg-text,#fff)",marginBottom:16,fontSize:16}}>👥 Monitored Accounts</h2><table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}><thead><tr style={{borderBottom:"1px solid var(--fg-border,#1e1e1e)",color:"#666"}}>{["Beneficiary ID","Name","Phone","State","Schemes","Risk Score"].map(h=>(<th key={h} style={{textAlign:"left",padding:"10px 14px",fontFamily:"monospace",fontSize:10}}>{h}</th>))}</tr></thead><tbody>{[["BEN0021","Rahul Kumar","9812345678","Bihar","MGNREGS","92%"],["BEN0047","Amit Sharma","9812345678","Jharkhand","PMAY","88%"],["BEN0093","Meena Kumari","9812345678","Maharashtra","Mid-Day Meal","95%"],["BEN0112","Kavita Verma","9867890123","UP","PM-KISAN","76%"],["BEN0134","Anita Roy","9889012345","Rajasthan","Ayushman Bharat","81%"]].map(([id,n,p,s,sc,r])=>(<tr key={id} style={{borderBottom:"1px solid var(--fg-border,#161616)"}}><td style={{padding:"10px 14px",color:"var(--fg-accent,#cc0000)",fontFamily:"monospace"}}>{id}</td><td style={{padding:"10px 14px",color:"var(--fg-text,#fff)"}}>{n}</td><td style={{padding:"10px 14px",color:"#888"}}>{p}</td><td style={{padding:"10px 14px",color:"#888"}}>{s}</td><td style={{padding:"10px 14px",color:"var(--fg-text,#ccc)"}}>{sc}</td><td style={{padding:"10px 14px"}}><span style={{color:"var(--fg-accent,#cc0000)",fontWeight:700}}>{r}</span></td></tr>))}</tbody></table></div>);
-const AnalyticsPage=()=>(<div style={{padding:24}}><h2 style={{color:"var(--fg-text,#fff)",marginBottom:16,fontSize:16}}>📊 Analytics Summary</h2><div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:16}}>{[{label:"Total Records Scanned",value:"2.4M",color:"var(--fg-text,#fff)"},{label:"Fraud Detection Rate",value:"15.2%",color:"var(--fg-accent,#cc0000)"},{label:"Amount Recovered",value:"₹95.8L",color:"#22c55e"},{label:"Active Investigations",value:"75",color:"#d69e2e"},{label:"Resolved Cases",value:"1,102",color:"#22c55e"},{label:"States Covered",value:"6",color:"var(--fg-text,#fff)"}].map(({label,value,color})=>(<div key={label} style={{background:"var(--fg-card,#111)",border:"1px solid var(--fg-border,#1e1e1e)",borderRadius:8,padding:20}}><div style={{color:"#666",fontSize:11,fontFamily:"monospace",marginBottom:8}}>{label}</div><div style={{color,fontSize:28,fontWeight:700}}>{value}</div></div>))}</div><h2 style={{color:"var(--fg-text,#fff)",marginTop:32,marginBottom:16,fontSize:16}}>🔍 Fraud Detection Methods</h2><div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:16}}>{FRAUD_METHODS.map(m=>(<div key={m.title} style={{background:"var(--fg-card,#111)",border:"1px solid var(--fg-border,#1e1e1e)",borderRadius:8,padding:16}}><div style={{fontSize:22,marginBottom:8}}>{m.icon}</div><div style={{color:"var(--fg-accent,#cc0000)",fontSize:12,fontWeight:600,marginBottom:6}}>{m.title}</div><div style={{color:"#666",fontSize:11,lineHeight:1.5}}>{m.desc}</div></div>))}</div></div>);
-
-const HelpPage=()=>(<div style={{padding:24,maxWidth:800}}><h2 style={{color:"var(--fg-text,#fff)",marginBottom:6,fontSize:18}}>❓ Help & Fraud Prevention Guide</h2><p style={{color:"#666",fontSize:12,marginBottom:24}}>How to protect yourself and beneficiaries from fraud.</p>{[{icon:"🔒",title:"Never Share Your OTP",body:"Government schemes never ask for OTP over phone. Hang up and report to 1930."},{icon:"🪪",title:"Protect Your Aadhaar",body:"Never share your Aadhaar number or biometric data with unknown persons."},{icon:"📱",title:"Use Official Apps Only",body:"Download government scheme apps only from official Play Store / App Store."},{icon:"🏦",title:"Check Your Bank Account",body:"Enable SMS alerts for every transaction. Report fraud within 3 days."},{icon:"🌐",title:"Verify Website URLs",body:"Government portals use .gov.in domains. Fraudulent sites use .com or .net."},{icon:"📞",title:"Cyber Crime Helpline",body:"National Cyber Crime Helpline: 1930. Report at cybercrime.gov.in."},{icon:"📊",title:"12 Graph Types",body:"After uploading CSV, click the chart type button (top right of chart) to switch between Bar, Line, Area, Pie, Donut, Radar, Scatter, Stacked Bar, Horizontal, Stepped, Bubble, and Funnel charts."},{icon:"📥",title:"Download Fraud Report",body:"After scanning, click '⬇ Download Fraud Report' for a full CSV with case IDs, risk scores and flag reasons."},{icon:"📧",title:"Email Alert Button",body:"Click '📧 Send Email Alert' after scanning to manually send an alert. You are in full control — no auto-emails."},{icon:"⌨️",title:"Keyboard Shortcuts",body:"Press ? to see all keyboard shortcuts. Press R to refresh, 1-4 to navigate pages instantly."},{icon:"🗺️",title:"India Heatmap",body:"The state-wise heatmap shows which states have the most fraud cases. Bubble size and color intensity indicate fraud volume."},{icon:"🏆",title:"Scheme Leaderboard",body:"Shows top 5 government schemes with most fraud cases ranked by case count."},].map(item=>(<div key={item.title} style={{background:"var(--fg-card,#111)",border:"1px solid var(--fg-border,#1e1e1e)",borderRadius:10,padding:"16px 20px",marginBottom:12,display:"flex",gap:16,alignItems:"flex-start"}}><div style={{fontSize:28,flexShrink:0,marginTop:2}}>{item.icon}</div><div><div style={{color:"var(--fg-text,#fff)",fontSize:14,fontWeight:600,marginBottom:6}}>{item.title}</div><div style={{color:"#777",fontSize:12,lineHeight:1.7}}>{item.body}</div></div></div>))}</div>);
-
-const FAQPage=()=>{
-  const[open,setOpen]=useState<number|null>(null);
-  const faqs=[{q:"What is FraudGuard?",a:"FraudGuard is an AI-powered government fraud detection system scanning beneficiary data across 9 fraud vectors in real time."},{q:"How does the ML model work?",a:"It flags: claims_per_month > 6, amount > ₹40,000, account age < 30 days, or location cluster ≤ 2."},{q:"How do I upload data?",a:"Overview → Upload Beneficiary Data. Required columns: beneficiary_id, name, phone, state, scheme, claims_per_month, amount, location_cluster, account_age_days."},{q:"How do email alerts work?",a:"Emails are NOT auto-sent. After scanning, click '📧 Send Email Alert' to control when to send."},{q:"How do I download the fraud report?",a:"After scanning, click '⬇ Download Fraud Report'. CSV includes Case ID, risk score (0-100%) and exact flag reasons."},{q:"How does login protection work?",a:"After 3 failed sign-in attempts, the login is locked for 30 seconds. This prevents brute force attacks."},{q:"What is the session timeout?",a:"After 15 minutes of inactivity, a 60-second countdown appears. You can click 'Stay Logged In' or it auto-logs you out."},{q:"What do keyboard shortcuts do?",a:"Press ? to see all shortcuts. R refreshes, 1-4 navigate pages, Esc closes popups."},{q:"Can I see last login info?",a:"Yes! Your last login time appears in the profile dropdown in the header."},{q:"What are the 12 graph types?",a:"Bar, Line, Area, Pie, Donut, Radar, Scatter, Stacked Bar, Horizontal Bar, Stepped Line, Bubble, and Funnel."}];
-  return(<div style={{padding:24,maxWidth:740}}><h2 style={{color:"var(--fg-text,#fff)",marginBottom:6,fontSize:18}}>📌 FAQ</h2><p style={{color:"#666",fontSize:12,marginBottom:24}}>Common questions about FraudGuard.</p>{faqs.map((f,i)=>(<div key={i} style={{background:"var(--fg-card,#111)",border:"1px solid var(--fg-border,#1e1e1e)",borderRadius:8,marginBottom:10,overflow:"hidden"}}><button onClick={()=>setOpen(open===i?null:i)} style={{width:"100%",display:"flex",justifyContent:"space-between",alignItems:"center",padding:"14px 18px",background:"transparent",border:"none",cursor:"pointer",textAlign:"left"}}><span style={{color:"var(--fg-text,#fff)",fontSize:13,fontWeight:600}}>{f.q}</span><span style={{color:"var(--fg-accent,#cc0000)",fontSize:18,lineHeight:1}}>{open===i?"−":"+"}</span></button>{open===i&&<div style={{padding:"0 18px 14px",color:"#777",fontSize:12,lineHeight:1.7,borderTop:"1px solid var(--fg-border,#1e1e1e)"}}><div style={{paddingTop:12}}>{f.a}</div></div>}</div>))}</div>);
-};
-
-const TermsPage=()=>(<div style={{padding:24,maxWidth:740}}><h2 style={{color:"var(--fg-text,#fff)",marginBottom:6,fontSize:18}}>📄 Terms & Conditions</h2><p style={{color:"#666",fontSize:12,marginBottom:24}}>Last updated: April 2026</p>{[{title:"1. Authorized Use Only",body:"FraudGuard is an internal government tool. Unauthorized access violates IT Act 2000, Section 66."},{title:"2. Data Confidentiality",body:"All beneficiary data is classified RESTRICTED. Do not share or transmit to unauthorized parties."},{title:"3. Accuracy Disclaimer",body:"The fraud detection model provides probabilistic outputs. Flagged records require manual review."},{title:"4. Email Alerts",body:"By registering, you consent to receive alerts. You can disable in Settings or trigger manually."},{title:"5. Session Security",body:"Each session is logged. Logout after each session on shared systems. Idle timeout is 15 minutes."},{title:"6. Data Retention",body:"No beneficiary data stored on external servers. CSV data is processed in-browser only."},{title:"7. Reporting Obligations",body:"Confirmed fraud cases must be escalated within 24 hours of detection."},].map(item=>(<div key={item.title} style={{marginBottom:20}}><div style={{color:"var(--fg-accent,#cc0000)",fontSize:13,fontWeight:700,marginBottom:6,fontFamily:"monospace"}}>{item.title}</div><div style={{color:"#777",fontSize:12,lineHeight:1.7,background:"var(--fg-card,#111)",border:"1px solid var(--fg-border,#1e1e1e)",borderRadius:8,padding:"12px 16px"}}>{item.body}</div></div>))}</div>);
-
-const SettingsPage=({userEmail,agentName,onLogout,theme,setTheme,language,setLanguage}:{userEmail:string;agentName:string;onLogout:()=>void;theme:ThemeName;setTheme:(t:ThemeName)=>void;language:string;setLanguage:(c:string)=>void})=>{
-  const[settings,setSettings]=useState({agent_name:agentName,alert_threshold:"0.75",claims_limit:"6",amount_limit:"40,000",email_alerts:true});
-  const[saved,setSaved]=useState(false);
-  const acc=THEMES[theme].accent;
-  const saveSettings=()=>{localStorage.setItem("fraudguard_settings",JSON.stringify(settings));localStorage.setItem("fraudguard_name",settings.agent_name);setSaved(true);toast("Settings saved!","success");setTimeout(()=>setSaved(false),2000);};
-  return(
-    <div style={{padding:24,maxWidth:580}}>
-      <h2 style={{color:"var(--fg-text,#fff)",marginBottom:24,fontSize:16}}>⚙️ Settings</h2>
-      {/* Font Size Feature 21 */}
-      <div style={{background:"var(--fg-card,#111)",border:"1px solid var(--fg-border,#1e1e1e)",borderRadius:8,padding:"16px 18px",marginBottom:12}}>
-        <div style={{color:"var(--fg-text,#fff)",fontSize:13,marginBottom:4}}>🔤 Accessibility — Font Size</div>
-        <div style={{color:"#555",fontSize:11,marginBottom:10}}>Adjust text size for better readability</div>
-        <FontSizeToggle accent={acc}/>
-      </div>
-      <div style={{background:"var(--fg-card,#111)",border:"1px solid var(--fg-border,#1e1e1e)",borderRadius:8,padding:"16px 18px",marginBottom:12}}>
-        <div style={{color:"var(--fg-text,#fff)",fontSize:13,marginBottom:4}}>Dashboard Theme</div>
-        <div style={{display:"flex",flexWrap:"wrap",gap:8,marginTop:8}}>
-          {(Object.entries(THEMES) as [ThemeName,typeof THEMES[ThemeName]][]).map(([key,val])=>(<button key={key} onClick={()=>{setTheme(key);applyTheme(key);}} style={{display:"flex",alignItems:"center",gap:6,padding:"6px 12px",background:theme===key?"var(--fg-accent,#cc0000)22":"transparent",border:`1px solid ${theme===key?"var(--fg-accent,#cc0000)":"#333"}`,borderRadius:6,cursor:"pointer",color:theme===key?"var(--fg-accent,#cc0000)":"#888",fontSize:11,fontFamily:"monospace",transition:"all .2s"}}>{val.icon} {val.label}</button>))}
-        </div>
-      </div>
-      <div style={{background:"var(--fg-card,#111)",border:"1px solid var(--fg-border,#1e1e1e)",borderRadius:8,padding:"16px 18px",marginBottom:12}}>
-        <div style={{color:"var(--fg-text,#fff)",fontSize:13,marginBottom:4}}>🌐 Language</div>
-        <div style={{color:"#555",fontSize:11,marginBottom:10}}>Dashboard display language (15 available)</div>
-        <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-          {LANGUAGES.map(lang=>(<button key={lang.code} onClick={()=>{setLanguage(lang.code);localStorage.setItem("fraudguard_lang",lang.code);}} style={{display:"flex",alignItems:"center",gap:4,padding:"5px 10px",background:language===lang.code?"var(--fg-accent,#cc0000)22":"transparent",border:`1px solid ${language===lang.code?"var(--fg-accent,#cc0000)":"#333"}`,borderRadius:6,cursor:"pointer",color:language===lang.code?"var(--fg-accent,#cc0000)":"#888",fontSize:11}}>{lang.flag} {lang.label}</button>))}
-        </div>
-      </div>
-      <div style={{background:"var(--fg-card,#111)",border:"1px solid var(--fg-border,#1e1e1e)",borderRadius:8,padding:"16px 18px",marginBottom:12}}>
-        <div style={{color:"var(--fg-text,#fff)",fontSize:13,marginBottom:4}}>Email Alerts</div>
-        <div style={{color:"#555",fontSize:11,marginBottom:12}}>Registered email: <span style={{color:"var(--fg-accent,#cc0000)"}}>{userEmail}</span></div>
-        <div style={{display:"flex",alignItems:"center",gap:10}}><span style={{color:"#888",fontSize:12}}>Send fraud alerts to email</span><button onClick={()=>setSettings(s=>({...s,email_alerts:!s.email_alerts}))} style={{background:settings.email_alerts?"#22c55e":"#333",border:"none",borderRadius:20,padding:"4px 16px",color:"#fff",cursor:"pointer",fontSize:12,transition:"background .2s"}}>{settings.email_alerts?"ON":"OFF"}</button></div>
-      </div>
-      {[{key:"agent_name",label:"Agent Name",desc:"Your display name"},{key:"alert_threshold",label:"Alert Threshold",desc:"Min fraud score (0–1)"},{key:"claims_limit",label:"Claims Limit",desc:"Max claims/month before flagging"},{key:"amount_limit",label:"Amount Limit (₹)",desc:"Max amount before flagging"}].map(({key,label,desc})=>(<div key={key} style={{background:"var(--fg-card,#111)",border:"1px solid var(--fg-border,#1e1e1e)",borderRadius:8,padding:"14px 18px",marginBottom:10,display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{color:"var(--fg-text,#fff)",fontSize:13}}>{label}</div><div style={{color:"#555",fontSize:11,marginTop:2}}>{desc}</div></div><input value={settings[key as keyof typeof settings] as string} onChange={e=>setSettings(s=>({...s,[key]:e.target.value}))} style={{background:"#1a1a1a",border:"1px solid #333",borderRadius:6,padding:"6px 10px",color:"var(--fg-accent,#cc0000)",fontFamily:"monospace",fontSize:13,width:120,textAlign:"right",outline:"none"}}/></div>))}
-      <div style={{display:"flex",gap:12,marginTop:12}}>
-        <button onClick={saveSettings} style={{background:saved?"#22c55e":"var(--fg-accent,#cc0000)",color:"#fff",border:"none",borderRadius:8,padding:"10px 28px",cursor:"pointer",fontSize:13,fontWeight:600,transition:"background 0.3s"}}>{saved?"✅ Saved!":"Save Settings"}</button>
-        <button onClick={onLogout} style={{background:"transparent",color:"var(--fg-accent,#cc0000)",border:"1px solid var(--fg-accent,#cc0000)",borderRadius:8,padding:"10px 24px",cursor:"pointer",fontSize:13}}>🚪 Logout</button>
-      </div>
-    </div>
-  );
-};
-
-// ─── NETWORK GRAPH ─────────────────────────────────────────────────────────
-const NetworkGraph=({data}:{data:Row[]})=>{
-  const nodes:{id:string;x:number;y:number}[]=[],edges:{x1:number;y1:number;x2:number;y2:number}[]=[];
-  const phoneMap:Record<string,string[]>={};
-  data.forEach(r=>{if(!phoneMap[r.phone])phoneMap[r.phone]=[];phoneMap[r.phone].push(r.beneficiary_id);});
-  const placed:Record<string,{x:number;y:number}>={};let idx=0;
-  Object.values(phoneMap).forEach(group=>{if(group.length>1){const cx=80+(idx%5)*160,cy=80+Math.floor(idx/5)*120;group.forEach((id,i)=>{const a=(i/group.length)*Math.PI*2;placed[id]={x:cx+Math.cos(a)*40,y:cy+Math.sin(a)*40};nodes.push({id,...placed[id]});});for(let i=0;i<group.length;i++)for(let j=i+1;j<group.length;j++)edges.push({x1:placed[group[i]].x,y1:placed[group[i]].y,x2:placed[group[j]].x,y2:placed[group[j]].y});idx++;}});
-  if(!nodes.length)return null;
-  return(<div style={{background:"var(--fg-card,#111)",border:"1px solid var(--fg-border,#1e1e1e)",borderRadius:12,padding:20}}><div style={{color:"var(--fg-text,#fff)",fontWeight:600,marginBottom:4,fontSize:14}}>🔗 Network Graph — Shared Phone Clusters</div><div style={{color:"#888",fontSize:11,marginBottom:12}}>Red nodes = suspicious accounts sharing the same phone number</div><svg width="100%" height="280" style={{background:"#0a0a0a",borderRadius:8}}>{edges.map((e,i)=><line key={i} x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2} stroke="#cc000044" strokeWidth={1.5}/>)}{nodes.map(n=><g key={n.id}><circle cx={n.x} cy={n.y} r={8} fill="var(--fg-accent,#cc0000)" opacity={0.85}/><text x={n.x} y={n.y+20} textAnchor="middle" fill="#888" fontSize={8}>{n.id.slice(0,6)}</text></g>)}</svg><div style={{marginTop:10,fontSize:11,color:"var(--fg-accent,#cc0000)",fontFamily:"monospace"}}>{nodes.length} suspicious nodes · {Object.values(phoneMap).filter(g=>g.length>1).length} clusters</div></div>);
-};
-
-// ─── UPLOAD SECTION ────────────────────────────────────────────────────────
-const UploadSection=({onDataLoaded,flaggedData,agentName,userEmail,fileUploaded}:{onDataLoaded:(d:Row[],f:Row[])=>void;flaggedData:Row[];agentName:string;userEmail:string;fileUploaded:boolean})=>{
-  const[dragging,setDragging]=useState(false);
-  const[processing,setProcessing]=useState(false);
-  const[fileName,setFileName]=useState("");
-  const[alertSent,setAlertSent]=useState(false);
-  const[sending,setSending]=useState(false);
-  const processCSV=(text:string)=>{
-    setProcessing(true);
-    const lines=text.trim().split("\n");
-    const rows:Row[]=lines.slice(1).map(line=>{const v=line.split(",");return{beneficiary_id:v[0]?.trim(),name:v[1]?.trim(),phone:v[2]?.trim(),state:v[3]?.trim(),scheme:v[4]?.trim(),claims_per_month:Number(v[5]),amount:Number(v[6]),location_cluster:Number(v[7]),account_age_days:Number(v[8])};});
-    const flagged=rows.filter(r=>r.claims_per_month>6||r.amount>40000||r.account_age_days<30||r.location_cluster<=2);
-    setTimeout(()=>{setProcessing(false);onDataLoaded(rows,flagged);toast(`✅ ${flagged.length} fraud cases detected from ${rows.length} records`,"success");},1500);
-  };
-  const handleFile=(file:File)=>{setFileName(file.name);const reader=new FileReader();reader.onload=e=>processCSV(e.target?.result as string);reader.readAsText(file);};
-  const downloadSample=()=>{const csv=["beneficiary_id,name,phone,state,scheme,claims_per_month,amount,location_cluster,account_age_days","BEN001,Rahul Kumar,9812345678,Bihar,MGNREGS,12,95000,2,15","BEN002,Priya Singh,9823456789,UP,PM-KISAN,2,8000,7,450","BEN003,Amit Sharma,9812345678,Jharkhand,PMAY,15,180000,1,8","BEN004,Sunita Devi,9834567890,Rajasthan,Ayushman Bharat,1,6000,9,600","BEN005,Raj Patel,9845678901,MP,PMEGP,3,12000,5,300","BEN006,Meena Kumari,9812345678,Maharashtra,Mid-Day Meal,18,200000,1,5"].join("\n");const blob=new Blob([csv],{type:"text/csv"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="sample_beneficiaries.csv";a.click();toast("Sample CSV downloaded","info");};
-  const handleSendAlert=async()=>{if(!flaggedData.length||!userEmail)return;setSending(true);const caseId="GOV-"+Math.floor(Math.random()*9000+1000);await sendFraudAlert(userEmail,flaggedData[0].scheme,`₹${(flaggedData[0].amount/100000).toFixed(1)}L`,flaggedData[0].state,caseId);setSending(false);setAlertSent(true);toast("📧 Alert email sent to "+userEmail,"success");setTimeout(()=>setAlertSent(false),4000);};
-  return(
-    <div style={{padding:24,background:"var(--fg-card,#111)",border:"1px solid var(--fg-border,#1e1e1e)",borderRadius:12}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-        <div><div style={{color:"var(--fg-text,#fff)",fontWeight:600,fontSize:15}}>📂 Upload Beneficiary Data</div><div style={{color:"#666",fontSize:11,marginTop:2}}>CSV · Fraud detected across 4 vectors: high claims, high amount, new account, suspicious location</div></div>
-        <div style={{display:"flex",gap:8,flexWrap:"wrap",justifyContent:"flex-end"}}>
-          <button onClick={downloadSample} style={{background:"transparent",color:"#22c55e",border:"1px solid #22c55e",borderRadius:6,padding:"6px 14px",cursor:"pointer",fontSize:12,fontWeight:600}}>⬇ Sample CSV</button>
-          {fileUploaded&&<>
-            <button onClick={()=>{downloadFraudReport(flaggedData,agentName);toast("📊 Fraud report downloaded","success");}} style={{background:"transparent",color:"var(--fg-accent,#cc0000)",border:"1px solid var(--fg-accent,#cc0000)",borderRadius:6,padding:"6px 14px",cursor:"pointer",fontSize:12,fontWeight:600}}>⬇ Download Fraud Report</button>
-            <button onClick={handleSendAlert} disabled={sending||alertSent} style={{background:alertSent?"#22c55e":"var(--fg-accent,#cc0000)",color:"#fff",border:"none",borderRadius:6,padding:"6px 14px",cursor:alertSent?"default":"pointer",fontSize:12,fontWeight:600,opacity:sending?0.7:1}}>{alertSent?"✅ Alert Sent!":sending?"⏳ Sending...":"📧 Send Email Alert"}</button>
-          </>}
-        </div>
-      </div>
-      <div onDragOver={e=>{e.preventDefault();setDragging(true);}} onDragLeave={()=>setDragging(false)} onDrop={e=>{e.preventDefault();setDragging(false);const f=e.dataTransfer.files[0];if(f)handleFile(f);}} onClick={()=>document.getElementById("csv-input")?.click()} style={{border:`2px dashed ${dragging?"var(--fg-accent,#cc0000)":"#333"}`,borderRadius:8,padding:32,textAlign:"center",cursor:"pointer",background:dragging?"rgba(204,0,0,0.05)":"transparent",transition:"all .2s"}}>
-        <input id="csv-input" type="file" accept=".csv" style={{display:"none"}} onChange={e=>{const f=e.target.files?.[0];if(f)handleFile(f);}}/>
-        {processing?<div style={{color:"var(--fg-accent,#cc0000)",fontFamily:"monospace"}}>⏳ Running fraud detection model...</div>:fileName?<div style={{color:"#22c55e",fontWeight:600}}>✅ {fileName} — ready</div>:<div style={{color:"#555"}}>📁 Drag and drop CSV here or click to browse</div>}
-      </div>
-    </div>
-  );
-};
-
-// ─────────────────────────────────────────────
 //  ROOT COMPONENT
 // ─────────────────────────────────────────────
 const Index=()=>{
@@ -809,7 +965,6 @@ const Index=()=>{
   const[exitingIds,setExitingIds]=useState<string[]>([]);
   const[fileUploaded,setFileUploaded]=useState(false);
   const[activePage,setActivePage]=useState("overview");
-  const[prevPage,setPrevPage]=useState("overview");
   const[searchQuery,setSearchQuery]=useState("");
   const[showNotifs,setShowNotifs]=useState(false);
   const[refreshKey,setRefreshKey]=useState(0);
@@ -832,16 +987,31 @@ const Index=()=>{
     setTimeout(()=>{setActivePage(page);setPageLoading(false);},150);
   };
 
-  const handleDataLoaded=(data:Row[],flagged:Row[])=>{setAllData(data);setFlaggedData(flagged);setFileUploaded(true);setCases(generateCasesFromRows(flagged));};
+  const handleDataLoaded=(data:Row[],flagged:Row[])=>{
+    setAllData(data);
+    setFlaggedData(flagged);
+    setFileUploaded(true);
+    setCases(generateCasesFromRows(flagged));
+  };
+
   const handleEscalate=(id:string)=>{
     setProcessingIds(p=>[...p,id]);
     setTimeout(()=>{setCases(cs=>cs.map(c=>c.id===id?{...c,status:"ESCALATED" as const,escalatedAt:new Date().toISOString()}:c));setProcessingIds(p=>p.filter(x=>x!==id));toast(`Case ${id} escalated to senior officer queue`,"warning");},800);
   };
+
   const handleResolve=(id:string)=>{
     setProcessingIds(p=>[...p,id]);
     setTimeout(()=>{setExitingIds(p=>[...p,id]);setTimeout(()=>{setCases(cs=>cs.map(c=>c.id===id?{...c,status:"RESOLVED" as const,resolvedAt:new Date().toISOString()}:c));setProcessingIds(p=>p.filter(x=>x!==id));setExitingIds(p=>p.filter(x=>x!==id));toast(`Case ${id} marked as resolved ✅`,"success");},300);},800);
   };
+
+  // Note handler (new feature)
+  const handleAddNote=(caseId:string,note:string)=>{
+    setCases(cs=>cs.map(c=>c.id===caseId?{...c,note}:c));
+    toast(`Note saved for ${caseId}`,"info");
+  };
+
   const handleRefresh=()=>{setRefreshKey(k=>k+1);setFileUploaded(false);setAllData([]);setFlaggedData([]);setCases([]);setTimeout(()=>{window.location.reload();},200);};
+
   const filteredFraudMethods=searchQuery?FRAUD_METHODS.filter(m=>m.title.toLowerCase().includes(searchQuery.toLowerCase())):[];
 
   // Feature 23: natural language search results
@@ -853,7 +1023,11 @@ const Index=()=>{
 
   return(
     <div style={{minHeight:"100vh",background:th.bg,color:th.text,position:"relative"}} onClick={()=>{showNotifs&&setShowNotifs(false);}}>
-      <style>{`@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}} .dashboard-fade{animation:fadePageIn 0.25s ease} @keyframes fadePageIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}`}</style>
+      <style>{`
+        @keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+        .dashboard-fade{animation:fadePageIn 0.25s ease}
+        @keyframes fadePageIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+      `}</style>
       <div style={{position:"fixed",inset:0,pointerEvents:"none",zIndex:0,backgroundImage:`radial-gradient(circle, ${th.accent}12 1px, transparent 1px)`,backgroundSize:"28px 28px"}}/>
 
       {/* Feature 17: Session Timeout */}
@@ -871,7 +1045,21 @@ const Index=()=>{
       </div>
 
       <div style={{position:"relative",zIndex:1}}>
-        <AppSidebar activePage={activePage} setActivePage={navigateTo} isOpen={sidebarOpen} isMobile={false} onToggle={()=>setSidebarOpen(o=>!o)} language={language}/>
+        {/* Updated AppSidebar with alertCount + caseStats */}
+        <AppSidebar
+          activePage={activePage}
+          setActivePage={navigateTo}
+          isOpen={sidebarOpen}
+          isMobile={false}
+          onToggle={()=>setSidebarOpen(o=>!o)}
+          language={language}
+          alertCount={cases.filter(c=>c.status==="ESCALATED").length}
+          caseStats={{
+            open:      cases.filter(c=>c.status==="OPEN").length,
+            escalated: cases.filter(c=>c.status==="ESCALATED").length,
+            resolved:  cases.filter(c=>c.status==="RESOLVED").length,
+          }}
+        />
         <div style={{marginLeft:sidebarOpen?200:72,display:"flex",flexDirection:"column",minHeight:"100vh",transition:"margin-left 0.3s"}}>
           <DashboardHeader
             onSearch={setSearchQuery} onRefresh={handleRefresh}
@@ -894,7 +1082,12 @@ const Index=()=>{
             {!pageLoading&&(
               <div className="dashboard-fade">
                 {/* Search results */}
-                {searchQuery&&filteredFraudMethods.length>0&&(<div style={{background:th.cardBg,border:`1px solid ${th.accent}44`,borderRadius:8,padding:16}}><div style={{color:th.accent,fontSize:12,fontFamily:"monospace",marginBottom:12}}>🔍 FRAUD METHODS — "{searchQuery}"</div>{filteredFraudMethods.map(m=>(<div key={m.title} style={{background:th.bg,border:`1px solid ${th.border}`,borderRadius:6,padding:"12px 16px",marginBottom:8}}><div style={{color:th.text,fontSize:13,fontWeight:600}}>{m.icon} {m.title}</div><div style={{color:"#666",fontSize:11,marginTop:4,lineHeight:1.5}}>{m.desc}</div></div>))}</div>)}
+                {searchQuery&&filteredFraudMethods.length>0&&(
+                  <div style={{background:th.cardBg,border:`1px solid ${th.accent}44`,borderRadius:8,padding:16}}>
+                    <div style={{color:th.accent,fontSize:12,fontFamily:"monospace",marginBottom:12}}>🔍 FRAUD METHODS — "{searchQuery}"</div>
+                    {filteredFraudMethods.map(m=>(<div key={m.title} style={{background:th.bg,border:`1px solid ${th.border}`,borderRadius:6,padding:"12px 16px",marginBottom:8}}><div style={{color:th.text,fontSize:13,fontWeight:600}}>{m.icon} {m.title}</div><div style={{color:"#666",fontSize:11,marginTop:4,lineHeight:1.5}}>{m.desc}</div></div>))}
+                  </div>
+                )}
 
                 {activePage==="overview"&&(
                   <>
@@ -923,24 +1116,43 @@ const Index=()=>{
 
                     {fileUploaded&&<NetworkGraph data={flaggedData}/>}
 
-                    {/* Feature 13/14/16: CaseTable with filter, bulk actions, pagination */}
+                    {/* Updated CaseTable with onAddNote */}
                     <CaseTable
                       cases={fileUploaded?nlpCases:[]}
                       processingCaseIds={processingIds}
                       exitingCaseIds={exitingIds}
                       onEscalate={handleEscalate}
                       onResolve={handleResolve}
+                      onAddNote={handleAddNote}
                       searchQuery={searchQuery}
                     />
                   </>
                 )}
-                {activePage==="alerts"   &&<AlertsPage/>}
+
+                {/* Updated AlertsPage with real cases + nav */}
+                {activePage==="alerts"&&(
+                  <AlertsPage
+                    cases={cases}
+                    onNavigateToCase={()=>navigateTo("overview")}
+                  />
+                )}
+
                 {activePage==="accounts" &&<AccountsPage/>}
                 {activePage==="analytics"&&<AnalyticsPage/>}
                 {activePage==="help"     &&<HelpPage/>}
                 {activePage==="faq"      &&<FAQPage/>}
                 {activePage==="terms"    &&<TermsPage/>}
-                {activePage==="settings" &&<SettingsPage userEmail={userEmail} agentName={agentName} onLogout={handleLogout} theme={theme} setTheme={(t)=>{setTheme(t);applyTheme(t);}} language={language} setLanguage={setLanguage}/>}
+                {activePage==="settings" &&(
+                  <SettingsPage
+                    userEmail={userEmail}
+                    agentName={agentName}
+                    onLogout={handleLogout}
+                    theme={theme}
+                    setTheme={(t)=>{setTheme(t);applyTheme(t);}}
+                    language={language}
+                    setLanguage={setLanguage}
+                  />
+                )}
               </div>
             )}
           </main>
