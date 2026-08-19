@@ -22,3 +22,15 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+# Environments and Secrets
+.env
+.venv/
+__pycache__/
+*.pyc
+
+# Datasets and Raw Data
+raw/
+datasets/processed/
+datasets/uploaded/
+
+

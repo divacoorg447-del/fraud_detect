@@ -1,0 +1,7 @@
+beneficiary_id,name,phone,state,scheme,claims_per_month,amount,location_cluster,account_age_days
+BEN001,Rahul Kumar,9812345678,Bihar,MGNREGS,12,95000,2,15
+BEN002,Priya Singh,9823456789,UP,PM-KISAN,2,8000,7,450
+BEN003,Amit Sharma,9812345678,Jharkhand,PMAY,15,180000,1,8
+BEN004,Sunita Devi,9834567890,Rajasthan,Ayushman Bharat,1,6000,9,600
+BEN005,Raj Patel,9845678901,MP,PMEGP,3,12000,5,300
+BEN006,Meena Kumari,9812345678,Maharashtra,Mid-Day Meal,18,200000,1,5
